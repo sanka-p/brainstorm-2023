@@ -1,22 +1,23 @@
-#!/usr/bin/python3
-
 # import libraries
+
+from pyfirmata import Arduino, util
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+
 import sys
 import glob
 import serial
-import datetime as dt
-from pyfirmata import Arduino, util
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-from itertools import count
 import time
-from scipy.fft import fft, fftfreq
-import numpy as np
 
-# set parameters
-PLT_HISTORY_SIZE = 100
-PLT_REFRESH_PERIOD = 100
+import csv
 
+# global parameters
+g_refresh_period = 0.05
+g_callibration_points = 100
+g_training_points = 1000
+
+# connect to arduino
 # detect os and list all ports
 if sys.platform.startswith('win'):
     ports = ['COM%s' % (i + 1) for i in range(256)]
@@ -57,115 +58,79 @@ for i in range(len(avail_ports)):
 if (board == None):
     print("All ports busy")
     exit()
-'''
+
+
 it = util.Iterator(board)
 it.start()
 
-# set up the AD8232 ECG module
-ecg_pin = board.get_pin('a:0:i')
-ecg_threshold = 100  # adjust this threshold to suit your needs
+sensor = board.get_pin('a:0:i')
 
-# loop forever, reading the ECG module and detecting muscle movement
+callibration_arr = []
+train_arr = []
+
+while len(callibration_arr) < g_callibration_points:
+    callibration_arr.append(sensor.read())
+    print(callibration_arr[-1])
+
+    if callibration_arr[-1] == None:
+        callibration_arr.pop()
+        continue
+
+    time.sleep(g_refresh_period)
+
+
+print("Now move your head")
+
+while len(train_arr) < g_training_points:
+    train_arr.append(sensor.read())
+
+    if train_arr[-1] == None:
+        train_arr.pop()
+        continue
+
+    time.sleep(0.005)
+
+print("Done")
+
+# print(callibration_arr)
+array = np.array(callibration_arr)
+x_train = np.array(train_arr)
+
+# Define the range of values for the state
+state_range = [min(array), max(array)]
+
+# Define the TensorFlow model
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(64, activation='relu', input_shape=(1,)),
+    tf.keras.layers.Dense(32, activation='relu'),
+    tf.keras.layers.Dense(2, activation='softmax')
+])
+
+# Compile the model
+model.compile(optimizer='adam',
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'])
+
+# Train the model
+# x_train = np.random.uniform(low=0, high=20, size=(1000, 1))
+y_train = np.zeros((1000,), dtype=int)
+y_train[(x_train >= state_range[0]) & (x_train <= state_range[1])] = 1
+model.fit(x_train, y_train, epochs=10)
+
+# Test the model on live sensor data
 while True:
-    ecg_value = ecg_pin.read()
-    print(ecg_value)
-    if ecg_value is not None and ecg_value > ecg_threshold:
-        print("Muscle movement detected!")
+    # read live sensor data and preprocess it (e.g., normalize)
+    data = sensor.read()
+    data = (data - state_range[0]) / (state_range[1] -
+                                      state_range[0])  # normalize the data
 
-    # wait for a short period to avoid flooding the serial connection
-    time.sleep(0.1)
-'''
+    # make a prediction using the model
+    prediction = model.predict(np.array([data]))
 
-#board.samplingOn(10)
-
-plt.style.use('fivethirtyeight')
-
-x_vals = [0, 0]
-y_vals = [0, 0]
-
-# start communication with board
-it = util.Iterator(board)
-it.start()
-
-
-# detetct if leads are off
-L0_plus = board.get_pin('d:10:i')
-L0_minus = board.get_pin('d:11:i')
-
-# if (board.digital[L0_plus].read() == 1 or
-#         board.digital[L0_minus].read() == 1):
-#     print("Leads disconnected!")
-#     exit()
-
-
-sensor_1 = board.get_pin('a:1:i')
-'''
-while True:
-    print(sensor_1.read())
-    time.sleep(0.2)
-'''
-index = count()
-
-'''
-fig, (ax1, ax2) = plt.subplots(2, 1)
-
-# Time domain plot
-line1 = ax1.plot([], [])
-ax1.set_xlim(0, PLT_HISTORY_SIZE)
-ax1.set_ylim(0, 1)
-
-# Freq domain plot
-line2 = ax1.plot([], [])
-ax2.set_xlim(0, 100) # TODO: Avoid hard coded values
-ax2.set_ylim(0, 1000)
-'''
-
-def animate(i):
-    # Hardcoded values. Change later
-    TENSED_RANGE = 0.05
-    RELAXED_RANGE = 0.1
-
-    global x_vals
-    global y_vals
-    global board
-
-    y_vals.append(sensor_1.read())
-    x_vals.append(next(index))
-
-    if y_vals[-1] == None:
-        return None
-
-    # variation = y_vals[-1] - y_vals[-2]
-    # print(variation, end=" ")
-    if y_vals[-1] < 0.5:
-        print("Tensed")
-    elif y_vals[-1] > 0.5:
-        print("Relax")
+    # print the prediction
+    if prediction[0][0] > prediction[0][1]:
+        print("The sensor data belongs to state 1.")
     else:
-        print("Undefined")
+        print("The sensor data belongs to state 2.")
 
-    # Limit x and y lists to 20 items
-    if (len(x_vals) > PLT_HISTORY_SIZE):
-        x_vals = x_vals[-PLT_HISTORY_SIZE:]
-        y_vals = y_vals[-PLT_HISTORY_SIZE:]
-
-	
-    # Compute Fourier Transform
-    y_fft = np.abs(fft(y_vals))
-    freqs = fftfreq(len(y_vals)) * 19200
-
-    # clear previous plots
-    plt.cla()
-
-    plt.subplot(211)
-    plt.plot(x_vals, y_vals)
-
-    plt.subplot(212)
-    plt.plot(freqs, y_fft)
-    plt.xlim(0, 100)
-    
-
-ani = FuncAnimation(plt.gcf(), animate, interval=PLT_REFRESH_PERIOD)
-
-plt.tight_layout()
-plt.show()
+    time.sleep(1)
