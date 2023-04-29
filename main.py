@@ -1,16 +1,13 @@
 # import libraries
 
-from pyfirmata import Arduino, util
-import tensorflow as tf
-import numpy as np
-import matplotlib.pyplot as plt
-
 import sys
 import glob
 import serial
 import time
-
-import csv
+from pyfirmata import Arduino, util
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
 
 # global parameters
 g_refresh_period = 0.05
@@ -59,15 +56,18 @@ if (board == None):
     print("All ports busy")
     exit()
 
-
+# start communication with the board
 it = util.Iterator(board)
 it.start()
 
+# define sensor pin
 sensor = board.get_pin('a:0:i')
 
 callibration_arr = []
 train_arr = []
 
+# read callibration data
+print("Reading callibration values")
 while len(callibration_arr) < g_callibration_points:
     callibration_arr.append(sensor.read())
     print(callibration_arr[-1])
@@ -78,6 +78,7 @@ while len(callibration_arr) < g_callibration_points:
 
     time.sleep(g_refresh_period)
 
+print("Done reading callibration values")
 
 print("Now move your head")
 
@@ -92,12 +93,8 @@ while len(train_arr) < g_training_points:
 
 print("Done")
 
-# print(callibration_arr)
-array = np.array(callibration_arr)
-x_train = np.array(train_arr)
-
-# Define the range of values for the state
-state_range = [min(array), max(array)]
+# Define the range of sensor values corresponding to the correct posture
+state_range = [min(callibration_arr), max(callibration_arr)]
 
 # Define the TensorFlow model
 model = tf.keras.Sequential([
@@ -112,25 +109,25 @@ model.compile(optimizer='adam',
               metrics=['accuracy'])
 
 # Train the model
-# x_train = np.random.uniform(low=0, high=20, size=(1000, 1))
+x_train = np.array(train_arr)
 y_train = np.zeros((1000,), dtype=int)
 y_train[(x_train >= state_range[0]) & (x_train <= state_range[1])] = 1
 model.fit(x_train, y_train, epochs=10)
 
 # Test the model on live sensor data
 while True:
-    # read live sensor data and preprocess it (e.g., normalize)
     data = sensor.read()
-    data = (data - state_range[0]) / (state_range[1] -
-                                      state_range[0])  # normalize the data
+
+    # normalize the data
+    data = (data - state_range[0]) / (state_range[1] - state_range[0])
 
     # make a prediction using the model
     prediction = model.predict(np.array([data]))
 
     # print the prediction
     if prediction[0][0] > prediction[0][1]:
-        print("The sensor data belongs to state 1.")
+        print("Wrong Posture.")
     else:
-        print("The sensor data belongs to state 2.")
+        print("Correct Posture.")
 
     time.sleep(1)
